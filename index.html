@@ -1,0 +1,306 @@
+<html>
+<head>
+<style type="text/css">
+body {font-family: Arial, Verdana}
+tr { background-color: #d0ffd0;
+border-collapse: collapse;}
+tbody tr:nth-child(odd) {
+	background-color: #d0ffd0;
+}
+
+tbody tr:nth-child(even) {
+	background-color: #c0ffc0;
+}
+table { 
+	font-family: Arial, Verdana;
+	border-collapse: collapse;
+}
+</style>
+</head>
+<body>
+
+<table>
+<tr><td>Stator Poles:</td><td><input id="StatorPoles" type="number" value="2" step="1" min="0" max="30" onchange="changeMotor(this)"></td></tr>
+<tr><td>Rotor Magnets:</td><td><input id="RotorMagnets" type="number" value="2"  step="1" min="1" max="30" onchange="changeMotor(this)"></td></tr>
+<tr><td>Rotor Start Angle:</td><td><input id="RotorStartAngle" type="number" value="45"  step="1" min="1" max="360" onchange="changeMotor(this)"></td></tr>
+
+<tr><td colspan="2" align="center"><input id="Restart" type="button" value="Restart" onclick="changeMotor(this)"></td></tr>
+<tr><td align="right"><input id="KickForce" type="number" value="16"  step="1" min="1" max="360"></td>
+<td><input id="Kick" type="button" value="Kick" onclick="kickMotor(this)"></td>
+</tr>
+
+<tr><td>Rotor Moment:</td><td align="right" id="RotMomet"></td></tr>
+<tr><td>Rotor Acceleration:</td><td align="right" id="RotAccel"></td></tr>
+<tr><td>Rotor Velocity:</td><td align="right" id="RotVelocity"></td></tr>
+<tr><td>Rotor Angle:</td><td align="right" id="RotAngle"></td></tr>
+
+<tr><td>Draw Gradient</td><td><input id="drawGradient" type="checkbox" oninput="changeDrawing(this)"></td></tr>
+<tr><td>Draw Poles</td><td><input id="drawPoles" type="checkbox" checked oninput="changeDrawing(this)"></tr>
+
+
+<tr><td>Timer, (ms):</td><td><input id="Timer" type="number" value="10"  step="1" min="10" max="2000"></td></tr>
+</table>
+
+<br>
+<canvas id="c1" width="500" height="500"></canvas>
+
+<script>
+var canvas = document.getElementById("c1");
+var ctx = canvas.getContext("2d");
+var drawGradients =false;
+drawPoles = true;
+
+var RotorMagnets = 8; // 
+var RotorMagnetsGap = 0.1;// 
+var RotorRadius = 160;
+var RotorWeight = 1.0 //Í„
+var RotorInertionMoment = RotorWeight * RotorRadius*RotorRadius / 1000000;
+
+var StatorPoles = 6; // 
+var StatorPolesGap = 0.1;// 
+var StatorRadius = 150;
+
+class StatorPole {
+	constructor(angle, radius, B) {
+		this.angle = angle;
+		this.radius = radius;
+		this.B = B;
+	}
+}
+
+class RotorMagnet {
+	constructor(angle, radius, B) {
+		this.angle = angle;
+		this.radius = radius;
+		this.B = B;
+		this.Moments = new Array();
+		this.MomentsAlt = new Array();
+		this.MomentSum = 0;
+	}
+}
+
+class Motor {
+	constructor (StatorPoles, StatorRadius, RotorMagnets, RotorRadius, RotorAngle= 0)
+	{
+		let dPi = 2 * Math.PI;	// double value of Pi
+		this.rotor = new Array();
+		this.stator = new Array();
+		
+		this.RotorTotalMoment = 0;
+		this.RotorVelocity = 0;
+		this.RotorAcceleration = 0;
+		this.RotorFrictionForce = 0;
+		this.RotorAngle = RotorAngle;
+
+		// Making Stator
+		for (let n = 0, a=0; n < StatorPoles; n++)
+		{
+			this.stator.push(new StatorPole(a,  StatorRadius, (n%2) ? -1 : 1  ));  // To do B vector calculate
+			a+= dPi/StatorPoles;
+		}
+		// Making Rotor
+		for (let  n=0, a = RotorAngle; n < RotorMagnets; n++)
+		{
+			this.rotor.push(new RotorMagnet(a,  RotorRadius, (n%2) ? -1 : 1 ));
+			a+= dPi/RotorMagnets;
+		}
+	}
+	
+	rotateRotor(ang)
+	{
+		for (let n = 0; n < this.rotor.length; n++)
+			this.rotor[n].angle+=ang;
+			
+		this.RotorAngle+=ang;
+	}
+	
+	calculateForces()
+	{
+		this.RotorTotalMoment = 0;
+		for (let r = 0; r < this.rotor.length; r++)
+		{
+			let MomentsSum = 0;
+			for (let s = 0; s < this.stator.length; s++)
+			{
+				let Ra = this.rotor[r].angle;
+				let Rr = this.rotor[r].radius;
+				let Rb = this.rotor[r].B;
+				let Sa = this.stator[s].angle;
+				let Sr = this.stator[s].radius;
+				let Sb = this.stator[s].B;
+				
+				let dy = Rr*Math.sin(Ra) - Sr*Math.sin(Sa);
+				let dx = Rr*Math.cos(Ra) - Sr*Math.cos(Sa)
+				let d = Math.sqrt(dx*dx + dy*dy);
+				
+				this.rotor[r].Moments[s] = (Rb*Sb*Math.cos(Sa-Ra) * Math.sin(Sa-Ra)/ (d*d/1000000));
+	//			this.rotor[r].Moments[s] = (Rb*Sb*Math.sin(2*(Sa-Ra))/ (d*d/1000000));
+				this.rotor[r].MomentsAlt[s] =Math.sign(-Math.sin(Ra - Sa))* (Rb*Sb*Math.sqrt(Math.cos(Sa-Ra)*Math.cos(Sa-Ra))/ (d*d/1000000));
+	//			this.rotor[r].MomentsAlt[s] =(Rb*Sb*Math.sin(2*(Sa-Ra))/ (d*d/1000000));
+				MomentsSum += this.rotor[r].Moments[s];
+			}
+			this.rotor[r].MomentSum = MomentsSum;
+			this.RotorTotalMoment += MomentsSum;
+		}
+	}
+}
+
+
+var motor;
+
+function changeMotor(value)
+{
+	
+	StatorPoles = Number(document.getElementById("StatorPoles").value);
+	//StatorRadius = document.getElementById("RotorMagnets").value;
+	RotorMagnets = Number(document.getElementById("RotorMagnets").value);
+	//RotorRadius = document.getElementById("RotorRadius").value;
+	RotorStartAngle = Number(document.getElementById("RotorStartAngle").value);	
+
+	motor = new Motor(StatorPoles, StatorRadius, RotorMagnets, RotorRadius);
+	
+	motor.rotateRotor(RotorStartAngle*Math.PI/180);
+}
+
+function kickMotor(value)
+{
+	motor.RotorVelocity += Number(document.getElementById("KickForce").value);
+}
+function changeDrawing(value)
+{
+	drawGradients = document.getElementById("drawGradient").checked;
+	drawPoles = document.getElementById("drawPoles").checked;
+}
+
+
+function drawRotorMagnet(x, y, r1, height, Angle, AngleWidth, B, txt)
+{
+	// Sector
+	let a1 = Angle - AngleWidth/2;
+	let a2 = Angle + AngleWidth/2
+	let r2 = r1 + height;
+
+	ctx.lineWidth = 1;
+	ctx.strokeStyle =(height*B>0)?"red":"blue";
+	ctx.beginPath();
+	ctx.arc(x, y, r1, a1, a2, false);
+	//ctx.lineTo(x + r2*Math.cos(a2), y + r2*Math.sin(a2)); 
+	ctx.arc(x,y,r2,a2  ,a1 , true);
+	ctx.lineTo(x + r1*Math.cos(a1), y + r1*Math.sin(a1));	
+
+	if (drawPoles)
+	{
+		ctx.stroke();
+		if(drawGradients)
+		{
+			let grd = ctx.createRadialGradient(x, y, r1, x, y, r2);
+			grd.addColorStop(0, (height*B>0)?"red":"blue");
+			grd.addColorStop(1, (height*B>0)?"blue":"red");
+			ctx.fillStyle = grd;	
+			ctx.fill();
+		}
+	}
+
+	let ca = Math.cos(Angle);
+	let sa = Math.sin(Angle)
+
+	// Arrow
+	ctx.fillStyle = "#C0C000";
+	ctx.beginPath();
+	ctx.arc(x+ r1*ca, y + r1*sa, r1/20, 0, 2*Math.PI, false);
+	ctx.fill();
+	
+	ctx.moveTo(x+ r1*ca, y + r1*sa);
+	ctx.lineTo(x+ (r1 + 30*B)*ca, y + (r1 + 30*B) *sa);
+	ctx.stroke();
+
+	// Text
+	ctx.fillStyle = "#000000";
+	ctx.font = '15px arial';
+	ctx.fillText(txt+"  "+B,x+  (r1 +height)*ca, y + (r1 + height) *sa);
+}
+
+ var alpha=0;
+
+function drawRotor(rotor,x, y, MagnetHeight)
+{
+	// Calculate half sector size one of rotor magnet, given the gap	
+	let AngleWidth = 2 * Math.PI / rotor.length * (1 - RotorMagnetsGap);
+
+	for (a=0; a < rotor.length; a++)
+	{
+		drawRotorMagnet(x,y, 
+			rotor[a].radius, MagnetHeight,
+			rotor[a].angle, AngleWidth,
+			rotor[a].B, "R "+a +"  "+rotor[a].MomentSum.toFixed(0));
+	}
+	
+} 
+
+
+function drawStator(stator,x, y, StatorHeight)
+{
+	// Calculate half sector size one of rotor magnet, given the gap	
+	let AngleWidth = 2 * Math.PI / stator.length * (1 - StatorPolesGap);
+
+	for (a=0; a < stator.length; a++)
+	{
+		drawRotorMagnet(x,y, 
+			stator[a].radius, - StatorHeight,
+			stator[a].angle, AngleWidth,
+			stator[a].B, "S "+a);	
+	}
+} 
+
+function go1()
+{
+	let t = document.getElementById("Timer").value;
+	t = (t>5000)?5000:(t<5)?5:t;
+	let deceleration = 2*Math.PI /100;
+
+	motor.RotorAcceleration = motor.RotorTotalMoment/30;
+	
+	let rv = motor.RotorVelocity + motor.RotorAcceleration/t; //motor.RotorAcceleration;
+	if (Math.abs(rv)<deceleration)
+		rv = 0;
+	else
+	{
+		rv -= Math.sign(rv) * deceleration;
+		rv = rv * (1-0.002);
+	}
+	motor.RotorVelocity = rv
+	motor.rotateRotor(motor.RotorVelocity /100);
+//		motor.rotateRotor(.1 /100);
+	
+	document.getElementById("RotMomet").textContent = motor.RotorTotalMoment.toFixed(0);
+	document.getElementById("RotAccel").textContent = motor.RotorAcceleration.toFixed(6);
+	document.getElementById("RotVelocity").textContent = motor.RotorVelocity.toFixed(6);
+	document.getElementById("RotAngle").textContent = (180/Math.PI*motor.RotorAngle).toFixed(3);
+
+	ctx.clearRect(0, 0, 500, 500);
+	//drawPole(200,200,100, 90, alpha, alpha + Math.PI/4, "#FF0000", "#000000");
+//	motor.rotateRotor(0.003);
+//	time += 0.001;
+	
+	ctx.beginPath();
+	ctx.lineWidth = motor.RotorTotalMoment/300/Math.PI;
+	ctx.arc(200,200,50,0,(motor.RotorTotalMoment/300)%Math.PI,motor.RotorTotalMoment<0);
+	ctx.stroke();
+
+	motor.calculateForces();
+
+	drawRotor(motor.rotor,200, 200, 20);
+	drawStator(motor.stator,200, 200, 50);
+	
+
+	timer = setTimeout(go1,t);
+}
+
+	changeMotor(0);
+	motor.RotorVelocity = 5*2*Math.PI; // RPS
+	go1();
+
+
+</script>
+</body>
+</html>
